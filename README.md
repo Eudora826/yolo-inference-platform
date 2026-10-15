@@ -7,15 +7,26 @@ Grafana dashboard, OpenTelemetry tracing through Jaeger, and alerting rules.
 One command brings up the service, its monitoring stack, and enough synthetic
 traffic to make the dashboards worth looking at.
 
-<!--
-截图还没拍。拍完把下面这段的注释去掉：
+![Grafana dashboard](docs/images/dashboard1.png)
 
-  1. docker compose --profile demo up --build
-  2. 等 2-3 分钟让曲线长出来
-  3. 分别截图存到 docs/images/
+<p align="center"><sub>RED metrics up top, latency percentiles below, and the end-to-end vs model-only split on the right.</sub></p>
 
-![Grafana dashboard](docs/images/dashboard.png)
--->
+A single request, broken down — the thing metrics alone cannot show you:
+
+![Jaeger trace](docs/images/trace.png)
+
+<p align="center"><sub><code>POST /predict/annotated</code>, 146 ms total: 13.6 ms decode, 96.7 ms inference, 28.3 ms annotate. That annotate span <em>is</em> the cost of this endpoint over <code>/predict</code> — no guessing required.</sub></p>
+
+<details>
+<summary><b>More panels</b> — latency distribution, detections by class, drift signals, async job health</summary>
+
+![Model behaviour and drift panels](docs/images/dashboard2.png)
+
+<sub>The heatmap's y-axis is the custom bucket layout, and the bright band lands squarely in the 60–80 ms range the boundaries were measured for. With the library defaults every one of those samples would fall into a single bucket.</sub>
+
+![Async job and operational panels](docs/images/dashboard3.png)
+
+</details>
 
 ---
 
