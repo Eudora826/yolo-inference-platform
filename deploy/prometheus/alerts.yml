@@ -1,0 +1,144 @@
+# 告警规则。
+#
+# 原则：告警"症状"，不告警"原因"。CPU 100% 但用户无感知 → 噪音；
+# CPU 30% 但请求全在超时 → CPU 告警什么也抓不到。每条规则都要能回答
+# 「这条响的时候，用户是不是真的受影响了」。
+#
+# 每条都有 `for`：指标天然抖动，没有持续时间约束就会被半夜的假警报
+# 炸醒，然后你会关掉告警，然后告警系统就死了（alert fatigue）。
+#
+# 阈值来自 docs/metrics-design.md 里的实测基线：推理 p95 ≈ 86ms。
+
+groups:
+  # -----------------------------------------------------------------
+  # 记录规则：把反复用到的复杂查询预计算成新指标。
+  # 命名约定是 level:metric:operation。
+  # -----------------------------------------------------------------
+  - name: yolo-recording
+    interval: 15s
+    rules:
+      - record: job:http_error_rate:ratio5m
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+          sum(rate(http_requests_total[5m]))
+
+      - record: job:inference_duration_seconds:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(inference_duration_seconds_bucket{source="image"}[5m])) by (le)
+          )
+
+      - record: job:detections_per_image:mean5m
+        expr: |
+          rate(detections_per_image_sum[5m])
+            /
+          rate(detections_per_image_count[5m])
+
+  - name: yolo-alerts
+    rules:
+      # ---------------------------------------------------------------
+      # 服务不可用。`up` 是 Prometheus 自动生成的：抓取成功 1，失败 0。
+      # for 只给 2 分钟 —— 服务挂了是最紧急的症状，不需要长时间确认。
+      # ---------------------------------------------------------------
+      - alert: ServiceDown
+        expr: up{job="yolo-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "YOLO 服务抓不到了（{{ $labels.instance }}）"
+          description: "Prometheus 已连续 2 分钟无法抓取 {{ $labels.instance }}/metrics，服务可能已崩溃或网络不通。"
+
+      # ---------------------------------------------------------------
+      # 只算 5xx。4xx 是客户端传了坏数据，服务正确地拒绝了它 ——
+      # 那是功能不是故障，不该半夜叫醒任何人。
+      # ---------------------------------------------------------------
+      - alert: HighErrorRate
+        expr: job:http_error_rate:ratio5m > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx 错误率 {{ $value | humanizePercentage }}（阈值 5%）"
+          description: "服务端错误率已持续 5 分钟高于 5%，用户正在遇到失败请求。"
+
+      # ---------------------------------------------------------------
+      # 基线 p95 ≈ 86ms，阈值定 500ms ≈ 6 倍余量。
+      # 留这么宽是为了容纳容器化开销和并发争抢，只有真正劣化才触发。
+      # 拍一个"好看的整数"当阈值是新手最常犯的错。
+      # ---------------------------------------------------------------
+      - alert: InferenceLatencyHigh
+        expr: job:inference_duration_seconds:p95 > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "推理 p95 达到 {{ $value | humanizeDuration }}（基线 ~86ms，阈值 500ms）"
+          description: "模型推理明显变慢。查 Jaeger 里最慢的几条 trace，看是推理本身还是解码变慢了。"
+
+      # ---------------------------------------------------------------
+      # 积压只能靠 Gauge 看见：提交任务的那个 HTTP 请求永远是几十毫秒，
+      # 后台堆了 50 个任务，请求延迟依然一片祥和。
+      # ---------------------------------------------------------------
+      - alert: VideoJobBacklog
+        expr: video_jobs_active > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "视频任务积压 {{ $value }} 个，已持续 15 分钟"
+          description: "后台任务的消费速度跟不上提交速度。单进程的 BackgroundTasks 没有横向扩展能力，考虑上任务队列。"
+
+      # ---------------------------------------------------------------
+      # 任务失败在 HTTP 指标里完全看不见：POST /videos 返回的是 202，
+      # 失败发生在响应之后，没有任何请求会返回 5xx。
+      # 后半段 `and` 是防止样本太少时被单次失败触发。
+      # ---------------------------------------------------------------
+      - alert: VideoJobFailureRate
+        expr: |
+          (
+            sum(rate(video_jobs_total{status="failed"}[15m]))
+              /
+            sum(rate(video_jobs_total[15m]))
+          ) > 0.2
+          and
+          sum(rate(video_jobs_total[15m])) > 0.002
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "视频任务失败率 {{ $value | humanizePercentage }}（阈值 20%）"
+          description: "后台标注任务大量失败。这个故障不会产生任何 5xx，只有这个指标能发现。"
+
+      # ---------------------------------------------------------------
+      # 数据漂移哨兵。平时每张图 3-5 个目标，掉到 0.5 以下说明输入或
+      # 模型出了问题：摄像头坏了、模型文件被换了、阈值被改错了。
+      # 这类故障延迟正常、错误率为零，只有业务指标能发现。
+      # `and` 那段保证有足够流量才判断，否则没流量时会误报。
+      # ---------------------------------------------------------------
+      - alert: DetectionRateCollapse
+        expr: |
+          job:detections_per_image:mean5m < 0.5
+          and
+          rate(detections_per_image_count[5m]) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "平均每张图只检测出 {{ $value | printf \"%.2f\" }} 个目标"
+          description: "检测数骤降，但服务本身没有报错。检查输入数据源和当前加载的模型（看 model_info 指标）。"
+
+      # ---------------------------------------------------------------
+      # 限流大量触发：可能是有人在压测，也可能是限流阈值配低了。
+      # severity 只给 info —— 它需要有人看一眼，但不需要立刻处理。
+      # ---------------------------------------------------------------
+      - alert: RateLimitingActive
+        expr: sum(rate(rate_limited_requests_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "限流每秒拦截 {{ $value | printf \"%.2f\" }} 个请求"
+          description: "有客户端持续触发限流。确认是异常流量还是 RATE_LIMIT_PER_MINUTE 设得太紧。"

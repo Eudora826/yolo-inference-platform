@@ -1,0 +1,27 @@
+# 开发覆盖层。日常改代码时用：
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# 镜像仍然由 Dockerfile 构建（依赖、系统库、非 root 用户全部保留），
+# 只是把 app/ 换成你磁盘上的目录，改代码存盘即生效，不用 rebuild。
+#
+# 故意不叫 docker-compose.override.yml —— 那个文件 compose 会自动加载，
+# 别人只想跑个 demo 却会莫名进入开发模式。显式指定更好。
+
+services:
+  yolo-service:
+    volumes:
+      # Dockerfile 里 WORKDIR 是 /app，app 包在 /app/app
+      - ./app:/app/app
+    environment:
+      # Windows 的文件改动事件传不进 Linux 容器，--reload 会完全不触发。
+      # 轮询费一点 CPU，但这是唯一可靠的办法。
+      WATCHFILES_FORCE_POLLING: "true"
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload

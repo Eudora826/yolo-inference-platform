@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.git/
+.github/
+tests/
+*.md
+.venv/
+venv/
+*.pt
+!yolov8n.pt
+.pytest_cache/

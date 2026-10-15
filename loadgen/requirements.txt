@@ -1,0 +1,6 @@
+requests==2.32.3
+pillow==10.4.0
+numpy==1.26.4
+# headless 版：不带 GUI 依赖，镜像小几百 MB。
+# 负载生成器只是合成一段小视频，绝对不需要 torch。
+opencv-python-headless==4.10.0.84

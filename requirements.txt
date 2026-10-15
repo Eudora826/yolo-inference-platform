@@ -1,0 +1,19 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+ultralytics==8.3.0
+pillow==10.4.0
+python-multipart==0.0.12
+prometheus-client==0.21.1
+# app/ 直接 import 了它们，只是碰巧被 ultralytics 传递带进来。
+# 你直接 import 的东西就该显式声明 —— 传递依赖是别人的实现细节。
+numpy==1.26.4
+opencv-python==4.10.0.84
+# 链路追踪。版本必须配套：核心包 1.X.0 ↔ instrumentation 0.(X+21)b0。
+# 只有 -api 是硬依赖（很小、纯 Python），其余在 tracing.setup() 里才 import。
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp-proto-grpc==1.27.0
+opentelemetry-instrumentation-fastapi==0.48b0

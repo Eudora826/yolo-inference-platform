@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YOLO Inference Service</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #181b24; --border: #2a2f3d;
+    --text: #e6e8ee; --muted: #9aa1b2; --accent: #4f8cff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh; padding: 2rem 1rem;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  h1 { font-size: 1.4rem; font-weight: 650; }
+  header a { color: var(--accent); text-decoration: none; font-size: .9rem; }
+  .grid { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+  label { display: block; font-size: .8rem; color: var(--muted); margin: .9rem 0 .3rem; }
+  label:first-child { margin-top: 0; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: .45rem .6rem; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .val { color: var(--text); font-variant-numeric: tabular-nums; }
+  #drop {
+    border: 2px dashed var(--border); border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 320px; cursor: pointer; text-align: center;
+    color: var(--muted); transition: border-color .15s; position: relative;
+    overflow: hidden;
+  }
+  #drop.hover { border-color: var(--accent); color: var(--accent); }
+  #canvas { max-width: 100%; height: auto; display: none; border-radius: 8px; }
+  #stats { margin-top: .8rem; font-size: .85rem; color: var(--muted); min-height: 1.2em; }
+  #detections { margin-top: .6rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+  .chip {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+    padding: .2rem .7rem; font-size: .8rem;
+  }
+  .chip b { font-weight: 600; }
+  .err { color: #ff6b6b; }
+  footer { margin-top: 1.2rem; font-size: .8rem; color: var(--muted); }
+  code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: .1rem .35rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>YOLO Inference Service</h1>
+    <a href="/docs">API docs</a>
+    <a href="/model/info">model info</a>
+    <a href="/metrics">metrics</a>
+  </header>
+
+  <div class="grid">
+    <div class="panel">
+      <label>Confidence threshold — <span class="val" id="confVal">0.25</span></label>
+      <input type="range" id="conf" min="0.05" max="0.95" step="0.05" value="0.25">
+
+      <label>Class filter (comma-separated, empty = all)</label>
+      <input type="text" id="classes" placeholder="person,dog,car">
+
+      <label>API key (only if the server requires one)</label>
+      <input type="password" id="apikey" placeholder="X-API-Key">
+
+      <label>Video annotation</label>
+      <div style="font-size:.8rem;color:var(--muted)">
+        Drop a <b>.mp4</b> file to start an async job; progress shows below.
+      </div>
+    </div>
+
+    <div class="panel">
+      <div id="drop">
+        <span id="dropHint">Drop an image or video here, or click to choose a file</span>
+        <canvas id="canvas"></canvas>
+      </div>
+      <input type="file" id="file" accept="image/*,video/mp4,video/*" hidden>
+      <div id="stats"></div>
+      <div id="detections"></div>
+    </div>
+  </div>
+
+  <footer>
+    Same detections via curl:
+    <code>curl -X POST "/predict?conf=0.25" -F "file=@image.jpg"</code>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const drop = $("drop"), canvas = $("canvas"), stats = $("stats"), dets = $("detections");
+$("conf").oninput = e => $("confVal").textContent = e.target.value;
+
+drop.onclick = () => $("file").click();
+$("file").onchange = e => e.target.files[0] && handle(e.target.files[0]);
+["dragover", "dragleave", "drop"].forEach(ev =>
+  drop.addEventListener(ev, e => {
+    e.preventDefault();
+    drop.classList.toggle("hover", ev === "dragover");
+    if (ev === "drop" && e.dataTransfer.files[0]) handle(e.dataTransfer.files[0]);
+  })
+);
+
+function headers() {
+  const key = $("apikey").value.trim();
+  return key ? { "X-API-Key": key } : {};
+}
+function params() {
+  const p = new URLSearchParams({ conf: $("conf").value });
+  const cls = $("classes").value.trim();
+  if (cls) p.set("classes", cls);
+  return p.toString();
+}
+function colorFor(i) { return `hsl(${(i * 47) % 360} 70% 55%)`; }
+
+function handle(file) {
+  if (file.type.startsWith("video/") || /\.(mp4|avi|mov|mkv)$/i.test(file.name)) {
+    return submitVideo(file);
+  }
+  predictImage(file);
+}
+
+async function predictImage(file) {
+  stats.textContent = "Running inference…";
+  dets.innerHTML = "";
+  const form = new FormData();
+  form.append("file", file);
+  const t0 = performance.now();
+  try {
+    const res = await fetch(`/predict?${params()}`, { method: "POST", body: form, headers: headers() });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    const data = await res.json();
+    await draw(file, data.detections);
+    stats.innerHTML = `<b>${data.count}</b> objects · inference ${data.inference_time_ms} ms · ` +
+      `round-trip ${(performance.now() - t0).toFixed(0)} ms · model ${data.model_version} · id ${data.request_id}`;
+    const byClass = {};
+    data.detections.forEach(d => byClass[d.class] = (byClass[d.class] || 0) + 1);
+    dets.innerHTML = Object.entries(byClass)
+      .map(([c, n]) => `<span class="chip"><b>${c}</b> × ${n}</span>`).join("");
+  } catch (err) {
+    stats.innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+function draw(file, detections) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const classIdx = {};
+      ctx.lineWidth = Math.max(2, img.width / 400);
+      ctx.font = `${Math.max(14, img.width / 60)}px system-ui`;
+      detections.forEach(d => {
+        if (!(d.class in classIdx)) classIdx[d.class] = Object.keys(classIdx).length;
+        const color = colorFor(classIdx[d.class]);
+        const [x1, y1, x2, y2] = d.bbox;
+        ctx.strokeStyle = color;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        const label = `${d.class} ${d.confidence.toFixed(2)}`;
+        const w = ctx.measureText(label).width + 8;
+        const h = parseInt(ctx.font) + 6;
+        ctx.fillStyle = color;
+        ctx.fillRect(x1, y1 - h, w, h);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, x1 + 4, y1 - 6);
+      });
+      canvas.style.display = "block";
+      $("dropHint").style.display = "none";
+      resolve();
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function submitVideo(file) {
+  stats.textContent = "Uploading video…";
+  dets.innerHTML = "";
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const res = await fetch(`/videos?${params()}`, { method: "POST", body: form, headers: headers() });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    const { job_id } = await res.json();
+    poll(job_id);
+  } catch (err) {
+    stats.innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+async function poll(jobId) {
+  const res = await fetch(`/jobs/${jobId}`);
+  const job = await res.json();
+  if (job.status === "completed") {
+    stats.innerHTML = `Job <b>${jobId}</b> completed — ` +
+      `<a style="color:var(--accent)" href="/jobs/${jobId}/result">download annotated video</a>`;
+  } else if (job.status === "failed") {
+    stats.innerHTML = `<span class="err">Job failed: ${job.error}</span>`;
+  } else {
+    stats.textContent =
+      `Job ${jobId}: ${job.status} · ${(job.progress * 100).toFixed(1)}% (${job.frames_done}/${job.frames_total} frames)`;
+    setTimeout(() => poll(jobId), 1000);
+  }
+}
+</script>
+</body>
+</html>

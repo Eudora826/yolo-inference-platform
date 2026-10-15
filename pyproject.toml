@@ -1,0 +1,30 @@
+[tool.pytest.ini_options]
+# 让 `pytest` 在仓库根目录下就能 import app 包，不用把它装成一个包
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 90
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/F 基础错误，I import 排序，UP 过时写法，B 常见 bug 模式（bugbear）
+select = ["E", "F", "I", "UP", "B"]
+
+ignore = [
+    # app/schemas.py 刻意使用 typing.List/Dict/Optional 而不是内置泛型
+    # （见该文件顶部注释：这样服务在 Python 3.8 上也能跑，那里 Pydantic
+    # 无法解析内置泛型）。整个代码库保持同一取向，所以关掉这三条 ——
+    # lint 配置应该编码项目实际的风格，而不是逼你重写无关代码。
+    "UP006",  # typing.Dict -> dict
+    "UP007",  # Optional[X] -> X | None
+    "UP035",  # deprecated typing imports
+    "UP032",  # .format() -> f-string，同一取向
+
+    # Query(...) / Depends(...) 作为函数默认值是 FastAPI 的标准写法，
+    # B008 在 FastAPI 项目里是公认的误报。
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里个别用例在函数内部 import cv2/numpy，是有意为之
+"tests/*" = ["E402"]

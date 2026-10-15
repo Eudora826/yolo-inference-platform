@@ -1,0 +1,53 @@
+# OpenTelemetry Collector：只处理链路（traces）。
+#
+# 注意这里**没有 metrics pipeline**，这是刻意的架构决策：指标由
+# Prometheus 直接抓服务的 /metrics，不经过 Collector。这样服务脱离
+# 整套栈单独 docker run 时，指标依然可用 —— 指标是服务对自身健康的
+# 自述，不该依赖外部组件才存在。
+#
+# 链路则相反：一条 trace 只有汇总到后端才有意义，所以走 Collector。
+# 好处是换后端（Jaeger → Tempo → 某个 SaaS）只改这个文件，应用一行
+# 不动、不用重新部署。
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # memory_limiter 必须排在 processors 列表的第一个，否则它保护不了
+  # 后面的处理器。流量突增时它会主动丢数据，而不是让 Collector OOM。
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  # 攒一批再发，减少网络往返。
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Jaeger 从 1.35 起原生支持 OTLP，所以用 otlp exporter 指向它即可。
+  # 老教程里的 `jaeger` exporter 已经废弃，别用。
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true   # 同一个 compose 网络内部，没有 TLS 要协商
+
+  # 排障用：Collector 到底收到数据没有，看 docker compose logs otel-collector
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger, debug]
+  telemetry:
+    logs:
+      level: info

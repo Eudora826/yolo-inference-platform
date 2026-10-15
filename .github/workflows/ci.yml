@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # 权重不进 git（6.3 MB 二进制），构建和测试时按需下载
+  WEIGHTS_URL: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
+
+jobs:
+  # 最快的先跑，失败得早，省 CI 时间也省你的时间
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.6.9
+      - run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # 不缓存的话每次都要重新下 200 MB 的 torch
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Download model weights
+        run: wget -q "$WEIGHTS_URL"
+      - name: Run tests
+        run: pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download model weights
+        run: wget -q "$WEIGHTS_URL"   # Dockerfile 会 COPY 它进镜像
+      - name: Build image
+        run: docker build -t yolo-inference:ci .
+      - name: Report image size
+        run: docker images yolo-inference:ci --format "{{.Repository}}:{{.Tag}}  {{.Size}}"
+
+  # 单元测试保证代码逻辑对，冒烟测试保证**整套东西真的能跑起来**。
+  # 这个 job 抓的是单元测试碰不到的一整类问题：服务名写错、端口写错、
+  # 挂载路径写错、healthcheck 写错、Grafana provisioning 路径写错。
+  smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download model weights
+        run: wget -q "$WEIGHTS_URL"
+
+      - name: Start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the service
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "service is up after ${i} attempts"; exit 0
+            fi
+            sleep 5
+          done
+          echo "service never became healthy"; exit 1
+
+      - name: Generate some traffic
+        run: |
+          for i in $(seq 1 5); do
+            curl -sf -X POST "http://localhost:8000/predict" -F "file=@cat.jpg" > /dev/null
+          done
+          # 故意来一个坏请求，确认错误路径也被记录
+          curl -s -o /dev/null -X POST "http://localhost:8000/predict" \
+            -F "file=@README.md;type=text/plain"
+
+      - name: Service exposes the metrics we expect
+        run: |
+          curl -sf http://localhost:8000/metrics > metrics.txt
+          for m in http_requests_total inference_duration_seconds_bucket \
+                   detections_total video_jobs_active http_requests_in_flight; do
+            grep -q "^${m}" metrics.txt || { echo "missing metric: $m"; exit 1; }
+          done
+          echo "all expected metrics present"
+
+      - name: Prometheus is actually scraping the service
+        run: |
+          # 光 curl 一下 /health 不够 —— 要确认 Prometheus 真的抓到了数据。
+          # 这一步才是这个 job 存在的理由。
+          for i in $(seq 1 30); do
+            up=$(curl -sf 'http://localhost:9090/api/v1/query?query=up{job="yolo-service"}' \
+                 | python3 -c "import json,sys; r=json.load(sys.stdin)['data']['result']; print(r[0]['value'][1] if r else '')")
+            if [ "$up" = "1" ]; then echo "target is UP"; exit 0; fi
+            sleep 5
+          done
+          echo "prometheus never saw the target as up"; exit 1
+
+      - name: Grafana is up and the dashboard was provisioned
+        run: |
+          curl -sf http://localhost:3000/api/health > /dev/null
+          curl -sf http://localhost:3000/api/dashboards/uid/yolo-service > /dev/null \
+            || { echo "dashboard was not provisioned"; exit 1; }
+          echo "grafana ok"
+
+      - name: Jaeger received traces
+        run: |
+          for i in $(seq 1 12); do
+            if curl -sf "http://localhost:16686/api/services" | grep -q "yolo-inference-platform"; then
+              echo "traces arrived"; exit 0
+            fi
+            sleep 5
+          done
+          echo "jaeger never saw the service"; exit 1
+
+      # 没有这一步的话，CI 挂了你完全不知道为什么
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

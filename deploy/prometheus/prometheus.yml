@@ -1,0 +1,27 @@
+global:
+  # 10 秒：足够看清短暂尖峰，又不至于让存储和 CPU 白白翻倍。
+  # rate() 的窗口至少要 4 倍于它，所以后面查询一律用 [1m] 起步。
+  scrape_interval: 10s
+  scrape_timeout: 5s
+  external_labels:
+    env: local
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # 直接抓服务自己暴露的 /metrics。
+  # 目标写服务名而不是 localhost —— 容器里的 localhost 指容器自己。
+  - job_name: yolo-service
+    static_configs:
+      - targets: ["yolo-service:8000"]
+        labels:
+          service: yolo-inference
+
+  # 把 Prometheus 自己也抓上。这里的 localhost 是对的，因为它就在
+  # Prometheus 容器内部。有了 prometheus_* 指标，你才知道监控系统
+  # 本身健不健康 —— 比如 prometheus_tsdb_head_series 就是当前活跃的
+  # 时间序列总数，也就是"基数"的量化值。
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pt
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+*.egg-info/
+
+# 视频素材和标注产物：几 MB 的二进制不进版本库。
+# 测试用的视频由 tests/ 里的代码现场生成，loadgen 也是自己合成的。
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# docs/ 只放设计文档和截图。学习用的教程和自测题放在仓库外，
+# 万一哪天挪回来本地参考，这几行保证它们不会被 git add -A 带进去。
+docs/*
+!docs/metrics-design.md
+!docs/images/
+
+# 依赖对账用的临时文件（阶段 00）
+local.txt
+container.txt
