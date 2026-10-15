@@ -58,7 +58,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))"
+          "expr": "(sum(rate(http_requests_total{status=~\"5..\"}[5m])) or vector(0)) / sum(rate(http_requests_total[5m]))"
         }
       ],
       "fieldConfig": {
@@ -670,8 +670,8 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (path) (rate(rate_limited_requests_total[5m]))",
-          "legendFormat": "{{path}}"
+          "expr": "sum(rate(rate_limited_requests_total[5m])) or vector(0)",
+          "legendFormat": "throttled"
         }
       ],
       "fieldConfig": {

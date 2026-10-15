@@ -17,9 +17,13 @@ groups:
   - name: yolo-recording
     interval: 15s
     rules:
+      # `or vector(0)` 是必需的，不是装饰：没有任何 5xx 时分子匹配不到
+      # 序列，返回的是**空向量**而不是 0，而空向量参与除法结果还是空。
+      # 没有它，服务完全健康时这条规则（以及用它的面板）显示的是
+      # "No data" 而不是 "0%" —— 最该让人安心的时刻反而看起来像坏了。
       - record: job:http_error_rate:ratio5m
         expr: |
-          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          (sum(rate(http_requests_total{status=~"5.."}[5m])) or vector(0))
             /
           sum(rate(http_requests_total[5m]))
 
