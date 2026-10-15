@@ -50,8 +50,9 @@ jobs:
     needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
-      - name: Download model weights
-        run: wget -q "$WEIGHTS_URL"   # Dockerfile 会 COPY 它进镜像
+      # 刻意不预先下载权重：Dockerfile 自己在构建时拉。这样这个 job
+      # 走的就是别人 clone 之后的真实路径 —— 先 wget 补上文件再构建，
+      # 等于替用户把坑填了，然后看不见坑。
       - name: Build image
         run: docker build -t yolo-inference:ci .
       - name: Report image size
@@ -65,9 +66,8 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v4
-      - name: Download model weights
-        run: wget -q "$WEIGHTS_URL"
 
+      # 同上：从一个干净的 checkout 直接起栈，和 README 教的命令一模一样。
       - name: Start the stack
         run: docker compose up -d --build
 

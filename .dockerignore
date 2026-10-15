@@ -6,6 +6,12 @@ tests/
 *.md
 .venv/
 venv/
+# 权重由 Dockerfile 在构建时拉取，不再从构建上下文 COPY，
+# 所以这里不需要给 yolov8n.pt 开例外了。
+#
+# 注意不要在这里排除 loadgen/ 或 *.jpg：loadgen 的构建上下文也是
+# 仓库根目录（见 docker-compose.yml 的 build.context），因此它和
+# 主镜像共用这一个 .dockerignore，排除了会让它的 COPY 失败。
 *.pt
-!yolov8n.pt
 .pytest_cache/
+*.mp4
