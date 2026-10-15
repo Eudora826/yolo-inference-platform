@@ -1,5 +1,7 @@
 # YOLO Inference Platform
 
+[![CI](https://github.com/Eudora826/yolo-inference-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Eudora826/yolo-inference-platform/actions/workflows/ci.yml)
+
 Production-shaped object detection as a service: **FastAPI + YOLOv8** with the
 observability a real deployment needs — Prometheus metrics, a provisioned
 Grafana dashboard, OpenTelemetry tracing through Jaeger, and alerting rules.
