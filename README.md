@@ -126,9 +126,9 @@ also carries the `trace_id`, so a log line links straight to its trace.
 
 ## Metrics
 
-15 metrics across three layers. The design rationale for each — including why
-the histogram buckets are what they are — is in
-[docs/metrics-design.md](docs/metrics-design.md).
+15 metrics across three layers. The histogram buckets are based on measured
+inference latency (yolov8n on CPU, 20 samples: p50 73 ms, p95 86 ms); the
+reasoning is in the docstring of [app/metrics.py](app/metrics.py).
 
 ### HTTP layer (RED)
 
@@ -300,7 +300,7 @@ app/            the service — routes, detector, jobs, metrics, tracing
 deploy/         prometheus, grafana provisioning, otel collector config
 loadgen/        traffic generator (compose profile "demo")
 tests/          34 tests, including instrumentation and span assertions
-docs/           measurement baseline and metric design rationale
+docs/images/    screenshots used in this README
 ```
 
 ## License

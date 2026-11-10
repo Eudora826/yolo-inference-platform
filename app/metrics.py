@@ -10,7 +10,6 @@ yolov8n inference on this machine lands in the 58-99 ms band (20 samples,
 p50 73 ms, p95 86 ms). With the default boundaries every one of those samples
 falls between le=0.075 and le=0.1, so histogram_quantile has nothing to
 interpolate over and reports a p95 of 97 ms for a true value of 86 ms.
-See docs/metrics-design.md for the raw measurements.
 """
 
 from prometheus_client import (
